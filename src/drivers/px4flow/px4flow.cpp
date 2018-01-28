@@ -53,15 +53,15 @@
 #include <string.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <errno.h>
+
 #include <stdio.h>
 #include <math.h>
 #include <unistd.h>
 
-#include <nuttx/arch.h>
-#include <nuttx/wqueue.h>
-#include <nuttx/clock.h>
-
+//#include <nuttx/arch.h>
+//#include <nuttx/wqueue.h>
+//#include <nuttx/clock.h>
+#include<px4_workqueue.h>
 #include <systemlib/perf_counter.h>
 #include <systemlib/err.h>
 #include <systemlib/param/param.h>
@@ -116,8 +116,8 @@ public:
 
 	virtual int 		init();
 
-	virtual ssize_t		read(struct file *filp, char *buffer, size_t buflen);
-	virtual int			ioctl(struct file *filp, int cmd, unsigned long arg);
+	virtual ssize_t		read(device::file_t *filp, char *buffer, size_t buflen);
+	virtual int			ioctl(device::file_t *filp, int cmd, unsigned long arg);
 
 	/**
 	 * Diagnostics - print some basic information about the driver.
@@ -297,7 +297,7 @@ PX4FLOW::probe()
 }
 
 int
-PX4FLOW::ioctl(struct file *filp, int cmd, unsigned long arg)
+PX4FLOW::ioctl(device::file_t *filp, int cmd, unsigned long arg)
 {
 	switch (cmd) {
 
@@ -373,27 +373,16 @@ PX4FLOW::ioctl(struct file *filp, int cmd, unsigned long arg)
 				return -EINVAL;
 			}
 
-			irqstate_t flags = px4_enter_critical_section();
-
+			ATOMIC_ENTER;
 			if (!_reports->resize(arg)) {
-				px4_leave_critical_section(flags);
+				ATOMIC_LEAVE;
 				return -ENOMEM;
 			}
 
-			px4_leave_critical_section(flags);
+			ATOMIC_LEAVE;
 
 			return OK;
 		}
-
-	case SENSORIOCGQUEUEDEPTH:
-		return _reports->size();
-
-	case SENSORIOCSROTATION:
-		_sensor_rotation = (enum Rotation)arg;
-		return OK;
-
-	case SENSORIOCGROTATION:
-		return _sensor_rotation;
 
 	case SENSORIOCRESET:
 		/* XXX implement this */
@@ -406,7 +395,7 @@ PX4FLOW::ioctl(struct file *filp, int cmd, unsigned long arg)
 }
 
 ssize_t
-PX4FLOW::read(struct file *filp, char *buffer, size_t buflen)
+PX4FLOW::read(device::file_t *filp, char *buffer, size_t buflen)
 {
 	unsigned count = buflen / sizeof(struct optical_flow_s);
 	struct optical_flow_s *rbuf = reinterpret_cast<struct optical_flow_s *>(buffer);
@@ -687,13 +676,13 @@ start(int argc, char *argv[])
 
 	/* entry check: */
 	if (start_in_progress) {
-		warnx("start already in progress");
+		PX4_INFO("start already in progress");
 		return 1;
 	}
 
 	if (g_dev != nullptr) {
 		start_in_progress = false;
-		warnx("already started");
+		PX4_INFO("already started");
 		return 1;
 	}
 
@@ -715,7 +704,7 @@ start(int argc, char *argv[])
 			address = strtoul(myoptarg, nullptr, 16);
 
 			if (address < I2C_FLOW_ADDRESS_MIN || address > I2C_FLOW_ADDRESS_MAX) {
-				warnx("invalid i2c address '%s'", myoptarg);
+				PX4_ERR("invalid i2c address '%s'", myoptarg);
 				err_flag = true;
 
 			}
@@ -726,7 +715,7 @@ start(int argc, char *argv[])
 			conversion_interval = strtoul(myoptarg, nullptr, 10);
 
 			if (conversion_interval < PX4FLOW_CONVERSION_INTERVAL_MIN || conversion_interval > PX4FLOW_CONVERSION_INTERVAL_MAX) {
-				warnx("invalid conversion interval '%s'", myoptarg);
+				PX4_WARN("invalid conversion interval '%s'", myoptarg);
 				err_flag = true;
 			}
 
@@ -751,7 +740,7 @@ start(int argc, char *argv[])
 
 	/* starting */
 	start_in_progress = true;
-	warnx("scanning I2C buses for device..");
+	PX4_INFO("scanning I2C buses for device..");
 
 	int retry_nr = 0;
 
@@ -802,13 +791,13 @@ start(int argc, char *argv[])
 			}
 
 			/* set the poll rate to default, starts automatic data collection */
-			fd = open(PX4FLOW0_DEVICE_PATH, O_RDONLY);
+			fd = px4_open(PX4FLOW0_DEVICE_PATH, O_RDONLY);
 
 			if (fd < 0) {
 				break;
 			}
 
-			if (ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_MAX) < 0) {
+			if (px4_ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_MAX) < 0) {
 				break;
 			}
 
@@ -868,7 +857,7 @@ test()
 	ssize_t sz;
 	int ret;
 
-	int fd = open(PX4FLOW0_DEVICE_PATH, O_RDONLY);
+	int fd = px4_open(PX4FLOW0_DEVICE_PATH, O_RDONLY);
 
 	if (fd < 0) {
 		err(1, "%s open failed (try 'px4flow start' if the driver is not running", PX4FLOW0_DEVICE_PATH);
@@ -876,65 +865,65 @@ test()
 
 
 	/* do a simple demand read */
-	sz = read(fd, &report, sizeof(report));
+	sz = px4_read(fd, &report, sizeof(report));
 
 	if (sz != sizeof(report)) {
-		warnx("immediate read failed");
+		PX4_ERR("immediate read failed");
 	}
 
-	warnx("single read");
-	warnx("pixel_flow_x_integral: %i", f_integral.pixel_flow_x_integral);
-	warnx("pixel_flow_y_integral: %i", f_integral.pixel_flow_y_integral);
-	warnx("framecount_integral: %u",
+	PX4_INFO("single read");
+	PX4_INFO("pixel_flow_x_integral: %i", f_integral.pixel_flow_x_integral);
+	PX4_INFO("pixel_flow_y_integral: %i", f_integral.pixel_flow_y_integral);
+	PX4_INFO("framecount_integral: %u",
 	      f_integral.frame_count_since_last_readout);
 
 	/* start the sensor polling at 10Hz */
-	if (OK != ioctl(fd, SENSORIOCSPOLLRATE, 10)) {
+	if (OK != px4_ioctl(fd, SENSORIOCSPOLLRATE, 10)) {
 		errx(1, "failed to set 10Hz poll rate");
 	}
 
 	/* read the sensor 5x and report each value */
 	for (unsigned i = 0; i < 10; i++) {
-		struct pollfd fds;
+		 px4_pollfd_struct_t fds;
 
 		/* wait for data to be ready */
 		fds.fd = fd;
 		fds.events = POLLIN;
-		ret = poll(&fds, 1, 2000);
+		ret = px4_poll(&fds, 1, 2000);
 
 		if (ret != 1) {
 			errx(1, "timed out waiting for sensor data");
 		}
 
 		/* now go get it */
-		sz = read(fd, &report, sizeof(report));
+		sz = px4_read(fd, &report, sizeof(report));
 
 		if (sz != sizeof(report)) {
 			err(1, "periodic read failed");
 		}
 
-		warnx("periodic read %u", i);
+		PX4_INFO("periodic read %u", i);
 
-		warnx("framecount_total: %u", f.frame_count);
-		warnx("framecount_integral: %u",
+		PX4_INFO("framecount_total: %u", f.frame_count);
+		PX4_INFO("framecount_integral: %u",
 		      f_integral.frame_count_since_last_readout);
-		warnx("pixel_flow_x_integral: %i", f_integral.pixel_flow_x_integral);
-		warnx("pixel_flow_y_integral: %i", f_integral.pixel_flow_y_integral);
-		warnx("gyro_x_rate_integral: %i", f_integral.gyro_x_rate_integral);
-		warnx("gyro_y_rate_integral: %i", f_integral.gyro_y_rate_integral);
-		warnx("gyro_z_rate_integral: %i", f_integral.gyro_z_rate_integral);
-		warnx("integration_timespan [us]: %u", f_integral.integration_timespan);
-		warnx("ground_distance: %0.2f m",
+		PX4_INFO("pixel_flow_x_integral: %i", f_integral.pixel_flow_x_integral);
+		PX4_INFO("pixel_flow_y_integral: %i", f_integral.pixel_flow_y_integral);
+		PX4_INFO("gyro_x_rate_integral: %i", f_integral.gyro_x_rate_integral);
+		PX4_INFO("gyro_y_rate_integral: %i", f_integral.gyro_y_rate_integral);
+		PX4_INFO("gyro_z_rate_integral: %i", f_integral.gyro_z_rate_integral);
+		PX4_INFO("integration_timespan [us]: %u", f_integral.integration_timespan);
+		PX4_INFO("ground_distance: %0.2f m",
 		      (double) f_integral.ground_distance / 1000);
-		warnx("time since last sonar update [us]: %i",
+		PX4_INFO("time since last sonar update [us]: %i",
 		      f_integral.sonar_timestamp);
-		warnx("quality integration average : %i", f_integral.qual);
-		warnx("quality : %i", f.qual);
+		PX4_INFO("quality integration average : %i", f_integral.qual);
+		PX4_INFO("quality : %i", f.qual);
 
 
 	}
 
-	errx(0, "PASS");
+	PX4_ERR(0, "PASS");
 }
 
 /**
@@ -949,11 +938,11 @@ reset()
 		err(1, "failed ");
 	}
 
-	if (ioctl(fd, SENSORIOCRESET, 0) < 0) {
+	if (px4_ioctl(fd, SENSORIOCRESET, 0) < 0) {
 		err(1, "driver reset failed");
 	}
 
-	if (ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0) {
+	if (px4_ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0) {
 		err(1, "driver poll restart failed");
 	}
 
